@@ -61,3 +61,63 @@ export const displayCurrent = async(req,res)=>{
     }
 }
 
+
+export const manualBooking = async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const vendorId = req.user.userId;
+    const { lotId, slotId } = req.params;
+
+    const lot = await parkingLot.findOne({ _id: lotId, createdBy: vendorId }).lean();
+    if (!lot) {
+      return res.status(404).json({ success: false, message: "Lot not associated to vendor" });
+    }
+
+    const now = new Date();
+    now.setHours(now.getHours() + 5);
+    now.setMinutes(now.getMinutes() + 30);
+
+    const nextFourHours = new Date(now.getTime() + 4 * 60 * 60 * 1000);
+
+    await session.withTransaction(async () => {
+      const slot = await parkingSlot.findOne({ _id: slotId, lotId, status: "available" }).session(session);
+      if (!slot) throw new Error("Slot not available for booking");
+
+      const overlap = await booking.find({
+        slotId,
+        lotId,
+        startTime: { $lte: nextFourHours },
+        status: { $in: ["active", "upcoming"] },
+      }).session(session);
+
+      if (overlap.length > 0) throw new Error("Overlapping booking in next 4 hours");
+
+      const newBooking = await booking.create(
+        {
+          userId: vendorId,
+          slotId,
+          lotId,
+          startTime: now,
+          status: "active",
+        },
+        { session }
+      );
+
+      await parkingSlot.findByIdAndUpdate(
+        slotId,
+        { currentBookingId: newBooking[0]._id, status: "booked" },
+        { session }
+      );
+    });
+
+    await session.endSession();
+    return res.status(200).json({ success: true, message: "Manual booking successful" });
+
+  } catch (err) {
+    await session.abortTransaction().catch(() => {}); // safe cleanup
+    await session.endSession();
+    console.error("Error in manual booking:", err.message);
+    return res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
+  }
+};
+
