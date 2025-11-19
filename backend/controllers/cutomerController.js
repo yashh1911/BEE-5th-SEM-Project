@@ -106,3 +106,43 @@ export const cancelbooking = async(req,res)=>{
         return res.status(500).json({success:"false",message:"Internal server error",error:error.message});
     }
 }
+
+export const displayCurrentCus = async(req,res)=>{
+    try{
+        const {start,end}=req.query; 
+        const lotId = req.params.lotid;
+        const lot = await parkingLot.find({_id:lotId,createdBy:vendorId});
+        console.log(lot)
+        if(!lot)return res.status(404).json({success:false,message:"Invalid lot Id"});
+        let finaldata={};
+        finaldata.boundary = {
+            name:lot.name,
+            units:lot.units,
+            vertices:lot.boundary
+        }
+        const slots = await parkingSlot.find({lotId:lotId}).select('name vertices slotType status currentbooingId');
+        for(const s of slots){
+            if(s.status!="unavailable"){
+                const overlappingBooking = await Booking.findOne({
+                    slotId: s._id,
+                    lotId: lot._id,
+                    status: { $in: ["upcoming", "active"] },
+                    startTime: { $lt: end } ,
+                    endTime: { $gt: new Date(start) }
+                });
+                if(overlappingBooking){
+                    s.status="booked";
+                }else{
+                    s.status="available";
+                }
+            }
+        }
+
+        finaldata.slots = slots
+        console.dir(finaldata);
+        return res.status(200).json({success:true,data:finaldata});
+
+    }catch(err){
+        return res.status(500).json({success:false,message:"Internal Server Error"});
+    }
+}
