@@ -19,3 +19,61 @@ export const showLots = async(req,res)=>{
     }
 }
 
+export const bookingSlot = async(req,res)=>{
+    try{
+        const {lotid} = req.params;
+        const {slotids , startTimeVar , endTimeVar} = req.body;
+        const lot = await parkingLot.findById(lotid);
+        if(!lot){
+            return res.status(404).json({message:"Parking lot not found"});
+        }
+
+        // this will just return a response if an invalid slot or the slot is already booked in the same time interval
+        const validids =await Promise.all( slotids.map(async(id)=>{
+            const slot = await  parkingSlot.find({
+                _id:id,
+                lotId:lotid,
+                status:"avaliable",
+            })
+            if(!slot)return null;
+            const overlappingBooking = await Booking.findOne({
+                slotId:id,
+                lotId:lotid,
+                status: { $in: ["upcoming", "active"] },
+                startTime: { $lt: new Date(endTimeVar) },
+                endTime: { $gt: new Date(startTimeVar) }
+            });
+            if(overlappingBooking) return null ;
+            else return id;
+        })
+    );
+        if(validids.includes(null)){
+            return res.status(400).json({success:false,message:"One or more slots are invalid or already booked in the selected time interval"});
+        }
+
+
+        // now we can create the booking in the booking collection
+
+        let booking = slotids.map((id) => {
+        
+            const newBooking = new Booking({
+                userId:new mongoose.Types.ObjectId(req.user.userId),
+                slotId:new mongoose.Types.ObjectId(id),
+                lotId:new mongoose.Types.ObjectId(lotid),
+                startTime:new Date(startTimeVar),
+                endTime:new Date(endTimeVar),
+            })
+            return newBooking;
+        });
+        // console.log("booking array created",booking);
+        // console.log(booking);
+
+        await Booking.insertMany(booking);
+
+        return res.status(200).json({status:"success",message:"Bookings created successfully"});
+
+    }catch(error){
+        console.log("Error in bookingsSlot:",error);
+        return res.status(500).json({message:"Internal server error",error:error.message});
+    }
+}
