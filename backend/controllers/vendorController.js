@@ -121,3 +121,41 @@ export const manualBooking = async (req, res) => {
   }
 };
 
+export const manualComplete = async(req,res)=>{
+    const session = await mongoose.startSession();
+    try{
+        const vendorId = req.user.userId;
+        const { lotId, slotId } = req.params;
+        const lot = await parkingLot.findOne({ _id: lotId, createdBy: vendorId }).lean();
+        if (!lot) {
+          return res.status(404).json({ success: false, message: "Lot not associated to vendor" });
+        }
+        await session.withTransaction( async()=>{
+            const slot = await parkingSlot.findOne({ _id: slotId, lotId }).session(session);
+            if (!slot) throw new Error("Slot not found in the specified lot");  
+            if(!slot.currentbookingId) throw new Error("No active booking for this slot");
+
+            const bookingRecord = await booking.findOne({_id:slot.currentbookingId,slotId:slotId,lotId:lotId,status:{$in:["active"]},type:"manual"}).session(session);
+            if(!bookingRecord) throw new Error("No active booking found to complete");
+            await booking.findByIdAndUpdate(
+                bookingRecord._id,
+                {status:"completed",endTime:new Date()},
+                {session}
+            )
+            await parkingSlot.findByIdAndUpdate(
+                slotId,
+                {currentBookingId:null,status:"available"},
+                {session}
+            );
+        });
+
+        await session.endSession();
+        return res.status(200).json({ success: true, message: "Manual booking ended successful" });
+
+    } catch (err) {
+        await session.abortTransaction().catch(() => {}); // safe cleanup
+        await session.endSession();
+        console.error("Error in manual completion:", err.message);
+        return res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
+    }
+};

@@ -27,13 +27,14 @@ const upload = multer({
 route.post("/upload/", authenticateToken, upload.single("dxfFile"), parseAndCreateParkingLot);
 
 
-import { viewAllLots,viewLot,displayCurrent,changeAvaliability,manualBooking } from "../controllers/vendorController.js";
+import { viewAllLots,viewLot,displayCurrent,changeAvaliability,manualBooking,manualComplete } from "../controllers/vendorController.js";
 
 route.get("/lots",authenticateToken,viewAllLots);
 route.get("/lot/:lotid",authenticateToken,viewLot);
 route.get("/lot/:lotid/display",authenticateToken,displayCurrent);
 route.patch("/lot/:lotid/status",authenticateToken,changeAvaliability);
 route.post("/lot/:lotid/manualbooking",authenticateToken,manualBooking);
+route.post("/lot/:lotid/manualcomplete",authenticateToken,manualComplete);
 
 
 
