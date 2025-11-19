@@ -77,3 +77,32 @@ export const bookingSlot = async(req,res)=>{
         return res.status(500).json({message:"Internal server error",error:error.message});
     }
 }
+export const viewBookings = async(req,res)=>{
+    try{
+        const userId = req.user.userId;
+        console.log("userId:",userId);
+        const bookings = await Booking.find({userId:new mongoose.Types.ObjectId(userId)})
+        .populate('slotId','name slotType status')
+        .populate('lotId','name hourlyRates meta.location.AddressLine meta.location.City meta.location.State meta.location.Pincode')
+        return res.status(200).json({success:"true",data:bookings});
+    }
+    catch(error){
+        console.log("Error in viewBookings:",error);
+        return res.status(500).json({success:"false",message:"Internal server error",error:error.message});
+    }
+};
+//to cancel a booking (its actually patching))
+export const cancelbooking = async(req,res)=>{
+    try{
+        const bookingid = req.params.bookingid;
+        const booking = await Booking.findOneAndUpdate({_id:bookingid,userId:req.user.userId,status:"upcoming"},{status:"cancelled"}, {new:true});
+        if(!booking){
+            return res.status(404).json({success:"false",message:"Booking not found"});
+        }
+        return res.status(200).json({success:"true",message:"Booking cancelled successfully"});
+    }
+    catch(error){
+        console.log("Error in cancelBooking:",error);
+        return res.status(500).json({success:"false",message:"Internal server error",error:error.message});
+    }
+}
