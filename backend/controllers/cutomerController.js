@@ -6,12 +6,34 @@ import parkingLot from "../model/parkingLotModel.js";
 // show all the lots in the area 
 export const showLots = async(req,res)=>{
     try{
+        const {start,end} = req.query;
         const Lots = await parkingLot.find({},'name description boundary meta createdBy').lean();
         if(Lots.length<=0){
             return res.status(404).json({message:"No parking lots found"});
         }
-        return res.status(200).json({message:"success",data:Lots});
+        for (const lot of Lots) {
+            const slots = await parkingSlot.find({lotId:lot._id,status:"available"}).select("_id").lean();
+            lot.totalSlots = slots.length;
+        }
+        const startTimeVar = new Date(start);
+        const endTimeVar =end?end: new Date(startTimeVar.getDate()+1);
+        for (const lot of Lots) {
+            const slots = await parkingSlot.find({lotId:lot._id,status:"available"}).select('_id ').lean();
+            let availableCount = 0;
+            await Promise.all(slots.map( async(s)=>{
+                const overlappingBooking = await Booking.findOne({
+                    slotId: s._id,
+                    lotId: lot._id,
+                    status: { $in: ["upcoming", "active"] },
+                    startTime: { $lt: endTimeVar  },
+                    endTime: { $gt: startTimeVar }
+                });
+                if(!overlappingBooking)availableCount++;
+            }));
+            lot.totalSlots = availableCount;
+        }
         
+        return res.status(200).json({message:"success",data:Lots});
     }
     catch(error){
         console.log("Error in showLots:",error);
@@ -19,6 +41,47 @@ export const showLots = async(req,res)=>{
     }
 }
 
+// to display the current status of slots on a specific lot for customer
+export const displayCurrentCus = async(req,res)=>{
+    try{
+        const {start,end}=req.query; 
+        const lotId = req.params.lotid;
+        const lot = await parkingLot.find({_id:lotId,createdBy:vendorId});
+        console.log(lot)
+        if(!lot)return res.status(404).json({success:false,message:"Invalid lot Id"});
+        let finaldata={};
+        finaldata.boundary = {
+            name:lot.name,
+            units:lot.units,
+            vertices:lot.boundary
+        }
+        const slots = await parkingSlot.find({lotId:lotId}).select('name vertices slotType status currentbooingId');
+        for(const s of slots){
+            if(s.status!="unavailable"){
+                const overlappingBooking = await Booking.findOne({
+                    slotId: s._id,
+                    lotId: lot._id,
+                    status: { $in: ["upcoming", "active"] },
+                    startTime: { $lt: end } ,
+                    endTime: { $gt: new Date(start) }
+                });
+                if(overlappingBooking){
+                    s.status="booked";
+                }else{
+                    s.status="available";
+                }
+            }
+        }
+
+        finaldata.slots = slots
+        console.dir(finaldata);
+        return res.status(200).json({success:true,data:finaldata});
+
+    }catch(err){
+        return res.status(500).json({success:false,message:"Internal Server Error"});
+    }
+}
+// to book a no fo slots on a specific lot
 export const bookingSlot = async(req,res)=>{
     try{
         const {lotid} = req.params;
@@ -77,6 +140,7 @@ export const bookingSlot = async(req,res)=>{
         return res.status(500).json({message:"Internal server error",error:error.message});
     }
 }
+// to view all booking of a customer
 export const viewBookings = async(req,res)=>{
     try{
         const userId = req.user.userId;
@@ -97,7 +161,7 @@ export const cancelbooking = async(req,res)=>{
         const bookingid = req.params.bookingid;
         const booking = await Booking.findOneAndUpdate({_id:bookingid,userId:req.user.userId,status:"upcoming"},{status:"cancelled"}, {new:true});
         if(!booking){
-            return res.status(404).json({success:"false",message:"Booking not found"});
+            return res.status(404).json({success:"false",message:"Booking not found or booking Active/cancelled "});
         }
         return res.status(200).json({success:"true",message:"Booking cancelled successfully"});
     }

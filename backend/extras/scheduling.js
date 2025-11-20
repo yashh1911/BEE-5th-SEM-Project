@@ -14,14 +14,30 @@ export const schedulingJob =async function(){
       console.log(now)
       try{
         await session.withTransaction(async () => {
-          const changedToCompleted = await  Booking.updateMany(
-            { status: {$in: ['active', 'upcoming']}, endTime: { $lte: now } },
-            { status: 'completed' }
+          const changedToCompleted = await  Booking.find(
+            { status: {$in: ['active']}, endTime: { $lte: now } },
           );
-          await Booking.updateMany(
-              { status: 'upcoming', startTime: { $lte: now } },
-              { status: 'active' }
+          for(const booking of changedToCompleted){
+            await parkingSlot.findByIdAndUpdate(booking.slotId, { status: 'available', currentBookingId: null }, { session });
+            await Booking.findByIdAndUpdate(booking._id, { status: 'completed' }, { session });
+            publisher.publish('slot.avaliability.update',JSON.stringify({
+              slotId:booking.slotId,
+              status:'available',
+            }));
+          }
+          
+          const changeToActive=await Booking.find(
+            { status: 'upcoming', startTime: { $lte: now } },
           );
+          for(const booking of changeToActive){
+            await parkingSlot.findByIdAndUpdate(booking.slotId, { status: 'booked', currentBookingId: booking._id }, { session });
+            await Booking.findByIdAndUpdate(booking._id, { status: 'active' }, { session });
+            publisher.publish('slot.avaliability.update',JSON.stringify({
+              lotId:booking.lotId,
+              slotId:booking.slotId,
+              status:'booked',
+            }));
+          }
         });
       }catch(err){
         console.log("Error in booking status update transaction:",err);
@@ -30,4 +46,3 @@ export const schedulingJob =async function(){
       }
   });
 };
-

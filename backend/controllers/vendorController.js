@@ -1,6 +1,5 @@
 import parkingSlot from "../model/parkingSlot.js";
 import parkingLot from "../model/parkingLotModel.js";
-import user from "../model/userModel.js"
 import booking from "../model/bookingModel.js"
 import mongoose from 'mongoose';
 
@@ -19,7 +18,6 @@ export const viewAllLots = async(req,res)=>{
 
     }
 }
-
 
 export const viewLot = async(req,res)=>{
     try{
@@ -53,7 +51,7 @@ export const displayCurrent = async(req,res)=>{
 
 
         finaldata.slots = slots
-        console.dir(finaldata);
+        // console.log(finaldata);
         return res.status(200).json({success:true,data:finaldata});
 
     }catch(err){
@@ -61,18 +59,16 @@ export const displayCurrent = async(req,res)=>{
     }
 }
 
-
 export const manualBooking = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     const vendorId = req.user.userId;
     const { lotId, slotId } = req.params;
-
+    console.log(lotId, slotId);
     const lot = await parkingLot.findOne({ _id: lotId, createdBy: vendorId }).lean();
     if (!lot) {
       return res.status(404).json({ success: false, message: "Lot not associated to vendor" });
     }
-
     const now = new Date();
     now.setHours(now.getHours() + 5);
     now.setMinutes(now.getMinutes() + 30);
@@ -80,8 +76,10 @@ export const manualBooking = async (req, res) => {
     const nextFourHours = new Date(now.getTime() + 4 * 60 * 60 * 1000);
 
     await session.withTransaction(async () => {
-      const slot = await parkingSlot.findOne({ _id: slotId, lotId, status: "available" }).session(session);
-      if (!slot) throw new Error("Slot not available for booking");
+      const slot = await parkingSlot.findOne({ _id: slotId, lotId}).session(session);
+      if (!slot) throw new Error("Slot not present onParking Lot");
+    //   console.log(slot);
+      if(slot.status!="avaliable"){throw new Error("Slot is not available for booking");}
 
       const overlap = await booking.find({
         slotId,
@@ -92,22 +90,21 @@ export const manualBooking = async (req, res) => {
 
       if (overlap.length > 0) throw new Error("Overlapping booking in next 4 hours");
 
-      const newBooking = await booking.create(
-        {
+      const newBooking = await   booking.create(
+        [{
           userId: vendorId,
           slotId,
           lotId,
           startTime: now,
           status: "active",
-        },
+          type:"manual",
+        }],
         { session }
       );
-
-      await parkingSlot.findByIdAndUpdate(
-        slotId,
-        { currentBookingId: newBooking[0]._id, status: "booked" },
-        { session }
-      );
+      console.log("New Booking Created:", newBooking[0]._id);
+      slot.status = "booked";
+      slot.currentbookingId = newBooking[0]._id;
+      await slot.save({ session });
     });
 
     await session.endSession();
@@ -130,23 +127,25 @@ export const manualComplete = async(req,res)=>{
         if (!lot) {
           return res.status(404).json({ success: false, message: "Lot not associated to vendor" });
         }
+        const now = new Date();
+        now.setHours(now.getHours() + 5);
+        now.setMinutes(now.getMinutes() + 30);
         await session.withTransaction( async()=>{
             const slot = await parkingSlot.findOne({ _id: slotId, lotId }).session(session);
-            if (!slot) throw new Error("Slot not found in the specified lot");  
+            if (!slot) throw new Error("Slot not found in the specified lot"); 
+            // console.log(slot)
             if(!slot.currentbookingId) throw new Error("No active booking for this slot");
 
-            const bookingRecord = await booking.findOne({_id:slot.currentbookingId,slotId:slotId,lotId:lotId,status:{$in:["active"]},type:"manual"}).session(session);
+            const bookingRecord = await booking.findOne({_id:slot.currentbookingId,slotId:slotId,lotId:lotId,status:"active",type:"manual"}).session(session);
             if(!bookingRecord) throw new Error("No active booking found to complete");
             await booking.findByIdAndUpdate(
                 bookingRecord._id,
-                {status:"completed",endTime:new Date()},
+                {status:"completed",endTime:now},
                 {session}
             )
-            await parkingSlot.findByIdAndUpdate(
-                slotId,
-                {currentBookingId:null,status:"available"},
-                {session}
-            );
+            slot.status = "avaliable";
+            slot.currentbookingId = null;
+            await slot.save({session});
         });
 
         await session.endSession();
@@ -159,3 +158,55 @@ export const manualComplete = async(req,res)=>{
         return res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
     }
 };
+
+export const changeAvaliability = async(req,res)=>{
+    try{
+        const lotid = req.params.lotid;
+        const vendorId =req.user.userId;
+        const{ slotIds,statusto} =req.body;
+        const  session = await mongoose.startSession();
+        if(statusto!="unavaliable" && statusto!="avaliable")return res.status(404).json({success:false,message:"invalid status changes asked"})
+        const lot = await parkingLot.findOne({_id:lotid,createdBy:vendorId});
+        if(!lot)return res.status(404).json({success:false,message:"lot not associated with user"})
+
+        const updatedStatus= statusto;
+        const prevStatus = (updatedStatus=="avaliable"?"unavaliable":"avaliable");
+
+
+        
+        try {
+            const session = await mongoose.startSession();
+            session.startTransaction();
+
+            await parkingSlot.updateMany(
+                { _id: { $in: slotIds }, lotId: lotid },
+                { $set: { status: updatedStatus, currentBookingId: null }},
+                { session }
+            );
+
+            if (prevStatus === "available") {
+                await booking.updateMany(
+                    { slotId: { $in: slotIds }, status: { $in: ["active", "upcoming"] }},
+                    { $set: { status: "refunded" }},
+                    { session }
+                );
+            }
+
+            await session.commitTransaction();
+            session.endSession();
+            console.log("valid availability transaction");
+
+        }catch(err){
+            console.log("error in atomic avaliability",err.message);
+            await session.abortTransaction();
+            return res.status(500).json({success:false,message:"Internal Server Error"});
+        }
+        session.endSession();
+        return res.status(200).json({success:true,message:"Succes in Status Correction"})
+
+
+    }catch(err){
+        console.log("error in changing avaliability",err.message);
+        return res.status(500).json({success:false,message:"Internal Server Error"});
+    }
+}
